@@ -1,0 +1,161 @@
+# ============================================================
+# R2D2 Linux AppStream - Splunk Universal Forwarder
+# inputs.conf
+#
+# Splunk Home:
+#   /opt/splunkforwarder
+#
+# Purpose:
+#   Collect Linux AppStream session lifecycle,
+#   Egress Switcher activity, and Egress/region changes.
+#
+# NOTE:
+#   Squid access.log is NOT collected here because Squid
+#   is handled by the squidproxy component separately.
+# ============================================================
+
+
+# ------------------------------------------------------------
+# 1. AWS AppStream session lifecycle
+#
+# Confirmed to contain:
+#   - sessionId
+#   - CreateSession
+#   - session creation
+#   - client-connected/client-disconnected
+#   - logon events
+#   - AppStream user/session lifecycle
+#
+# Uses a directory monitor because the filename contains
+# the date and changes over time.
+# ------------------------------------------------------------
+
+[monitor:///var/log/appstream/AppStreamAgent/]
+disabled = 0
+whitelist = appstream-server.*\.log$
+sourcetype = r2d2:appstream:agent
+
+
+# ------------------------------------------------------------
+# 2. Egress / AWS Region / Timezone activity
+#
+# Confirmed example:
+#   Request: {"aws_region": "us-east-1"}
+#   Mapping: us-east-1 -> America/New_York
+#
+# This provides a clean timestamped indication of the
+# AWS region associated with an Egress change.
+# ------------------------------------------------------------
+
+[monitor:///apps/logs/timezone.log]
+disabled = 0
+sourcetype = r2d2:egress:timezone
+
+
+# ------------------------------------------------------------
+# 3. R2D2 Egress and Profile Switcher
+#
+# Confirmed during Ohio -> Virginia test to contain:
+#   - selected Egress name
+#   - selected proxy hostname
+#   - proxy port (3128)
+#   - Chrome/Firefox proxy configuration
+#
+# Example:
+#   egress = Virginia
+#   selected proxy =
+#       us-east-1.nonprod-r2d2-test-lambda:3128
+# ------------------------------------------------------------
+
+[monitor:///apps/logs/egressSwitcher_debug.log]
+disabled = 0
+sourcetype = r2d2:egress:switcher
+
+
+# ============================================================
+# Browser URL History
+# ============================================================
+#
+# Chrome History was confirmed at:
+#
+#   /apps/cache/chrome/Default/History
+#
+# while Chrome is running.
+#
+# This is a SQLite database and MUST NOT be monitored directly
+# by Splunk as a normal file input.
+#
+# The intended design is:
+#
+# Chrome History SQLite
+#       |
+#       v
+# URL extraction script
+#       |
+#       v
+# /apps/logs/browser_history.log
+#       |
+#       v
+# Splunk
+#
+# Once the browser-history extractor is implemented,
+# enable the stanza below.
+# ============================================================
+
+[monitor:///apps/logs/browser_history.log]
+disabled = 1
+sourcetype = r2d2:browser:history
+
+
+# ============================================================
+# IMPORTANT EXCLUSIONS
+# ============================================================
+#
+# DO NOT monitor:
+#
+# /apps/logs/session.log
+#
+# Reason:
+#   We confirmed that session.log contains the complete
+#   AppStream environment and user-data/token information.
+#   Sending the entire file to Splunk would ingest unnecessary
+#   and potentially sensitive data.
+#
+#
+# DO NOT monitor:
+#
+# /apps/logs/env_from_catalog.log
+#
+# Reason:
+#   Although it contains useful fields such as:
+#       AppStream_Session_ID
+#       AppStream_Session_Reservation_DateTime
+#       AppStream_Resource_Name
+#       AppStream_Stack_Name
+#       AppStream_UserName
+#
+#   it also contains a large collection of environment
+#   variables. Only selected fields should be extracted later
+#   if they are required for reporting.
+#
+#
+# DO NOT monitor:
+#
+# /apps/logs/memory.log
+# /apps/logs/egress_switcher_autostart.log
+#
+# unless there is a specific operational/debugging requirement.
+#
+#
+# DO NOT add:
+#
+# [monitor:///var/log/squid/access.log]
+#
+# to this file.
+#
+# Squid has its own component configuration:
+#
+#   components/squidproxy/config/inputs.conf
+#
+# and should remain collected on the Squid/proxy side.
+# ============================================================
