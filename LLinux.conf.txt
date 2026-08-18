@@ -1,0 +1,42 @@
+# ============================================================
+# R2D2 Linux AppStream inputs.conf
+# ============================================================
+
+
+# AppStream session lifecycle
+[monitor:///var/log/appstream/AppStreamAgent/]
+disabled = 0
+whitelist = appstream-server.*\.log$
+sourcetype = r2d2:appstream:agent
+# index = <from existing Windows/Splunk configuration>
+
+
+# Egress region / timezone activity
+[monitor:///apps/logs/timezone.log]
+disabled = 0
+sourcetype = r2d2:egress:timezone
+# index = <existing index>
+
+
+# Egress Switcher activity
+[monitor:///apps/logs/egressSwitcher_debug.log]
+disabled = 0
+sourcetype = r2d2:egress:switcher
+# index = <existing index>
+
+
+# Sanitized session data
+# Do NOT monitor raw session.log because it contains
+# environment/user-data information.
+[monitor:///apps/logs/session_events.log]
+disabled = 0
+sourcetype = r2d2:appstream:session
+# index = <existing index>
+
+
+# Extracted browser navigation
+# Generated from Chrome/Firefox SQLite history DB.
+[monitor:///apps/logs/browser_history.log]
+disabled = 0
+sourcetype = r2d2:browser:history
+# index = <existing index>
