@@ -1,0 +1,561 @@
+<form version="1.1">
+  <label>Windows User Activity &amp; FDB Status</label>
+  <description>
+    Windows Event Log dashboard for successful logon, logoff, workstation lock/unlock,
+    unexpected shutdowns and current FDB status.
+  </description>
+
+  <!-- ========================================================= -->
+  <!-- DASHBOARD INPUTS                                           -->
+  <!-- ========================================================= -->
+
+  <fieldset submitButton="false" autoRun="true">
+
+    <input type="time" token="time_tok" searchWhenChanged="true">
+      <label>Time Range</label>
+      <default>
+        <earliest>-24h@h</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+
+    <input type="dropdown" token="system_tok" searchWhenChanged="true">
+      <label>System / Host</label>
+      <choice value="*">All Systems</choice>
+      <default>*</default>
+
+      <search>
+        <query>
+          index=cisnet-ws
+          (sourcetype="WinEventLog:Security" OR sourcetype="WinEventLog:System")
+          | stats count by host
+          | sort host
+          | fields host
+        </query>
+        <earliest>-7d@d</earliest>
+        <latest>now</latest>
+      </search>
+
+      <fieldForLabel>host</fieldForLabel>
+      <fieldForValue>host</fieldForValue>
+    </input>
+
+    <input type="text" token="lanid_tok" searchWhenChanged="true">
+      <label>LAN ID</label>
+      <default>*</default>
+    </input>
+
+  </fieldset>
+
+
+  <!-- ========================================================= -->
+  <!-- BASE WINDOWS EVENT SEARCH                                  -->
+  <!-- ========================================================= -->
+
+  <search id="base_windows_events">
+
+    <query>
+      index=cisnet-ws host="$system_tok$"
+      (
+        (
+          sourcetype="WinEventLog:Security"
+          (
+            EventCode=4624
+            OR EventCode=4634
+            OR EventCode=4647
+            OR EventCode=4800
+            OR EventCode=4801
+          )
+          NOT (
+            (EventCode=4624 OR EventCode=4634)
+            AND
+            (Logon_Type=7 OR LogonType=7)
+          )
+        )
+        OR
+        (
+          sourcetype="WinEventLog:System"
+          EventCode=6008
+        )
+      )
+
+      | eval ACCT=case(
+          mvcount(Account_Name)&gt;1, mvindex(Account_Name,1),
+          isnotnull(Account_Name), mvindex(Account_Name,0),
+          isnotnull(TargetUserName), TargetUserName,
+          isnotnull(user), user,
+          true(), "No account data"
+        )
+
+      | eval ACCT=lower(ACCT)
+
+      | where
+          sourcetype="WinEventLog:System"
+          OR "$lanid_tok$"="*"
+          OR ACCT=lower("$lanid_tok$")
+
+      | eval EventType=case(
+          EventCode=4624, "Successful Logon",
+          EventCode=4634, "Account Logoff",
+          EventCode=4647, "User Initiated Logoff",
+          EventCode=4800, "Workstation Locked",
+          EventCode=4801, "Workstation Unlocked",
+          EventCode=6008, "Unexpected Shutdown",
+          true(), "Other"
+        )
+
+      | eval FDB_Flag=case(
+          EventCode=4624, "ON",
+          EventCode=4801, "ON",
+          EventCode=4634, "OFF",
+          EventCode=4647, "OFF",
+          EventCode=4800, "OFF",
+          EventCode=6008, "OFF",
+          true(), "UNKNOWN"
+        )
+
+      | rex field=Message "shutdown at (?&lt;zTime&gt;[^,\.]+) on (?&lt;zDate&gt;.+?) was unexpected"
+
+      | rex field=Message "(?&lt;Message1&gt;[^\.\r\n]+)"
+
+      | eval ShutDownTime=if(
+          isnotnull(zTime) AND isnotnull(zDate),
+          "Unexpected shutdown occurred at ".zDate." ".zTime." Local Time",
+          null()
+        )
+
+      | eval Message2=coalesce(ShutDownTime,Message1,Message)
+
+      | fillnull value="No account data" ACCT
+
+      | fields
+          _time
+          host
+          EventCode
+          EventType
+          ACCT
+          FDB_Flag
+          Message2
+          sourcetype
+    </query>
+
+    <earliest>$time_tok.earliest$</earliest>
+    <latest>$time_tok.latest$</latest>
+
+  </search>
+
+
+  <!-- ========================================================= -->
+  <!-- ROW 1 - SUMMARY PANELS                                     -->
+  <!-- ========================================================= -->
+
+  <row>
+
+    <!-- Current FDB Status -->
+
+    <panel>
+      <title>Current FDB Status</title>
+
+      <single>
+
+        <search base="base_windows_events">
+          <query>
+            | sort 0 - _time
+            | head 1
+            | rename FDB_Flag as "FDB Status"
+            | table "FDB Status"
+          </query>
+        </search>
+
+        <option name="drilldown">none</option>
+
+      </single>
+    </panel>
+
+
+    <!-- Total Events -->
+
+    <panel>
+      <title>Total Windows Events</title>
+
+      <single>
+
+        <search base="base_windows_events">
+          <query>
+            | stats count as "Total Events"
+          </query>
+        </search>
+
+        <option name="drilldown">none</option>
+
+      </single>
+    </panel>
+
+
+    <!-- Unexpected Shutdown Count -->
+
+    <panel>
+      <title>Unexpected Shutdowns</title>
+
+      <single>
+
+        <search base="base_windows_events">
+          <query>
+            | search EventCode=6008
+            | stats count as "Unexpected Shutdowns"
+          </query>
+        </search>
+
+        <option name="drilldown">none</option>
+
+      </single>
+    </panel>
+
+
+    <!-- Data Freshness -->
+
+    <panel>
+      <title>Windows Log Data Status</title>
+
+      <single>
+
+        <search>
+          <query>
+            index=cisnet-ws host="$system_tok$"
+            (sourcetype="WinEventLog:Security"
+             OR sourcetype="WinEventLog:System")
+
+            | stats latest(_time) as latest_event
+
+            | eval minutes_since_latest=
+                round((now()-latest_event)/60,1)
+
+            | eval status=case(
+                isnull(latest_event),"NO DATA",
+                minutes_since_latest&gt;15,"STALE",
+                true(),"OK"
+              )
+
+            | table status
+          </query>
+
+          <earliest>$time_tok.earliest$</earliest>
+          <latest>$time_tok.latest$</latest>
+
+        </search>
+
+        <option name="drilldown">none</option>
+
+      </single>
+    </panel>
+
+  </row>
+
+
+  <!-- ========================================================= -->
+  <!-- ROW 2 - TIMELINE                                           -->
+  <!-- ========================================================= -->
+
+  <row>
+
+    <panel>
+
+      <title>User Activity Timeline</title>
+
+      <chart>
+
+        <search base="base_windows_events">
+          <query>
+            | timechart span=15m count by EventType limit=10 useother=f
+          </query>
+        </search>
+
+        <option name="charting.chart">line</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleX.visibility">collapsed</option>
+        <option name="charting.axisTitleY.text">Event Count</option>
+        <option name="drilldown">none</option>
+
+      </chart>
+
+    </panel>
+
+  </row>
+
+
+  <!-- ========================================================= -->
+  <!-- ROW 3 - EVENT DISTRIBUTION                                 -->
+  <!-- ========================================================= -->
+
+  <row>
+
+    <panel>
+
+      <title>Event Distribution</title>
+
+      <chart>
+
+        <search base="base_windows_events">
+          <query>
+            | stats count as Events by EventCode EventType
+            | sort - Events
+            | eval Event=EventCode." - ".EventType
+            | table Event Events
+          </query>
+        </search>
+
+        <option name="charting.chart">column</option>
+        <option name="charting.legend.placement">none</option>
+        <option name="charting.axisTitleX.text">Windows Event</option>
+        <option name="charting.axisTitleY.text">Count</option>
+        <option name="drilldown">none</option>
+
+      </chart>
+
+    </panel>
+
+
+    <panel>
+
+      <title>FDB ON vs OFF Events</title>
+
+      <chart>
+
+        <search base="base_windows_events">
+          <query>
+            | stats count as Events by FDB_Flag
+            | rename FDB_Flag as "FDB Status"
+          </query>
+        </search>
+
+        <option name="charting.chart">pie</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="drilldown">none</option>
+
+      </chart>
+
+    </panel>
+
+  </row>
+
+
+  <!-- ========================================================= -->
+  <!-- ROW 4 - CURRENT USER STATE                                 -->
+  <!-- ========================================================= -->
+
+  <row>
+
+    <panel>
+
+      <title>Current State by User and System</title>
+
+      <table>
+
+        <search base="base_windows_events">
+          <query>
+            | search EventCode!=6008
+
+            | stats
+                latest(_time) as LastSeen
+                latest(EventCode) as LastEventID
+                latest(EventType) as LastEvent
+                latest(FDB_Flag) as CurrentState
+                by host ACCT
+
+            | convert ctime(LastSeen)
+
+            | rename
+                host as System
+                ACCT as "LAN ID"
+                LastSeen as "Last Seen"
+                LastEventID as "Event ID"
+                LastEvent as "Last Event"
+                CurrentState as "FDB Status"
+
+            | table
+                System
+                "LAN ID"
+                "Last Seen"
+                "Event ID"
+                "Last Event"
+                "FDB Status"
+
+            | sort System "LAN ID"
+          </query>
+        </search>
+
+        <option name="count">20</option>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+
+      </table>
+
+    </panel>
+
+  </row>
+
+
+  <!-- ========================================================= -->
+  <!-- ROW 5 - RECENT EVENT ACTIVITY                              -->
+  <!-- ========================================================= -->
+
+  <row>
+
+    <panel>
+
+      <title>Recent Windows User Activity</title>
+
+      <table>
+
+        <search base="base_windows_events">
+
+          <query>
+            | rename
+                _time as Time
+                EventCode as "Event ID"
+                EventType as Event
+                ACCT as "LAN ID"
+                host as System
+                FDB_Flag as "FDB Flag"
+                Message2 as Message
+
+            | table
+                Time
+                System
+                "LAN ID"
+                "Event ID"
+                Event
+                "FDB Flag"
+                Message
+
+            | sort 0 - Time
+          </query>
+
+        </search>
+
+        <option name="count">25</option>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+
+      </table>
+
+    </panel>
+
+  </row>
+
+
+  <!-- ========================================================= -->
+  <!-- ROW 6 - UNEXPECTED SHUTDOWNS                               -->
+  <!-- ========================================================= -->
+
+  <row>
+
+    <panel>
+
+      <title>Unexpected Shutdown Details - Event ID 6008</title>
+
+      <table>
+
+        <search base="base_windows_events">
+
+          <query>
+            | search EventCode=6008
+
+            | rename
+                _time as Time
+                host as System
+                Message2 as "Shutdown Details"
+
+            | table
+                Time
+                System
+                EventCode
+                "Shutdown Details"
+
+            | sort 0 - Time
+          </query>
+
+        </search>
+
+        <option name="count">20</option>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+
+      </table>
+
+    </panel>
+
+  </row>
+
+
+  <!-- ========================================================= -->
+  <!-- ROW 7 - EVENT ID REFERENCE                                 -->
+  <!-- ========================================================= -->
+
+  <row>
+
+    <panel>
+
+      <title>Windows Event ID Reference</title>
+
+      <table>
+
+        <search>
+
+          <query>
+            | makeresults count=6
+
+            | streamstats count as row
+
+            | eval EventID=case(
+                row=1,"4624",
+                row=2,"4634",
+                row=3,"4647",
+                row=4,"4800",
+                row=5,"4801",
+                row=6,"6008"
+              )
+
+            | eval Meaning=case(
+                row=1,"Successful Logon",
+                row=2,"Account Logged Off",
+                row=3,"User Initiated Logoff",
+                row=4,"Workstation Locked",
+                row=5,"Workstation Unlocked",
+                row=6,"Unexpected Shutdown"
+              )
+
+            | eval Channel=case(
+                row&lt;6,"Security",
+                row=6,"System"
+              )
+
+            | eval FDB=case(
+                row=1,"ON",
+                row=5,"ON",
+                true(),"OFF"
+              )
+
+            | rename
+                EventID as "Event ID"
+                FDB as "FDB Flag"
+
+            | table
+                "Event ID"
+                Channel
+                Meaning
+                "FDB Flag"
+          </query>
+
+        </search>
+
+        <option name="count">10</option>
+        <option name="drilldown">none</option>
+
+      </table>
+
+    </panel>
+
+  </row>
+
+</form>
