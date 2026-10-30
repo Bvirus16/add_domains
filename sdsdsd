@@ -55,3 +55,4 @@ earliest=-24h latest=now
         max(latest_event) AS latest_event
   BY environment account_id
 | convert ctime(latest_event)
+| sort environment
