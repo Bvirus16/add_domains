@@ -1,0 +1,13 @@
+index="aws-cloudtrail-fdns" sourcetype="aws:cloudtrail"
+earliest=-24h latest=now
+recipientAccountId IN ("772618793657","776171595951")
+| eval environment=case(
+    recipientAccountId="772618793657","R2D2 Production",
+    recipientAccountId="776171595951","R2D2 Non-production"
+  )
+| stats count AS events
+        values(awsRegion) AS regions
+        values(eventSource) AS services
+        latest(_time) AS latest_event
+  BY environment recipientAccountId index sourcetype
+| convert ctime(latest_event)
