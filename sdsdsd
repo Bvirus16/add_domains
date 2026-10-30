@@ -20,3 +20,20 @@ earliest=-24h latest=now
 | table _time source host owner accountId account_id
         aws_account_id recipientAccountId
         logGroup logStream _raw
+
+
+==============================================================
+index="aws-cloudtrail-fdns" sourcetype="aws:s3:cloudwatchlogs"
+earliest=-24h latest=now
+| spath
+| search accountId IN ("772618793657","776171595951")
+| eval environment=case(
+    accountId="772618793657","R2D2 Production",
+    accountId="776171595951","R2D2 Non-production"
+  )
+| stats count AS events
+        dc(logStream) AS log_streams
+        latest(_time) AS latest_event
+  BY environment accountId logGroup
+| convert ctime(latest_event)
+| sort environment logGroup
