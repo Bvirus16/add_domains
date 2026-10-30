@@ -56,3 +56,10 @@ earliest=-24h latest=now
   BY environment account_id sourcetype
 | convert ctime(latest_event)
 | sort environment sourcetype
+
+index="aws-cloudtrail-fdns" sourcetype="aws:s3:cloudmonitor"
+earliest=-24h latest=now
+| rex field=source "(?<account_id>772618793657|776171595951)"
+| where isnotnull(account_id)
+| dedup account_id
+| table account_id _raw
