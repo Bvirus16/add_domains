@@ -44,9 +44,9 @@ earliest=-24h latest=now
   WHERE index="aws-cloudtrail-fdns"
     sourcetype="aws:s3:cloudwatchlogs"
     earliest=-30d latest=now
-    (source="/772618793657/" OR source="/776171595951/")
   BY source
 | rex field=source "/(?<account_id>772618793657|776171595951)/"
+| where isnotnull(account_id)
 | eval environment=case(
     account_id="772618793657","R2D2 Production",
     account_id="776171595951","R2D2 Non-production"
